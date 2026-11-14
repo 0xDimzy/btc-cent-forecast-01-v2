@@ -78,6 +78,26 @@ under the 8 s cap. Output per case:
 to an error only when a market has no usable price at all; the forecast is
 always the last finite positive close.
 
+## Robustness (editor pass, post-open rebuild)
+
+Two failure modes that would previously have zeroed the whole run are now
+isolated per case:
+
+- **Market fallback:** if the named `btc-usdc` market has no finite
+  positive close, the entry uses the first market in file order that does,
+  instead of failing the case.
+- **Per-case fault isolation:** an unreadable or malformed case file is
+  logged to stderr and skipped; the run exits 0 and still writes outputs
+  for every other case. Previously one bad file aborted the run before any
+  output was written.
+
+Both are behaviour-preserving on valid inputs: on the 6 practice cases the
+forecasts are unchanged (still exactly the checkpoint closes), and two runs
+remain byte-identical. Verified with synthetic cases: a `btc-usdc` market
+of all-invalid closes fell back to the other market (forecast 300.12346),
+and a malformed `.in` file was skipped while the neighbouring cases were
+still written.
+
 ## Files
 
 - `main.ts` — the whole entry: persistence forecast + I/O.

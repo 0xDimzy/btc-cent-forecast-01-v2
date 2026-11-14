@@ -61,14 +61,36 @@ interface Case {
 const price5 = (x: number): number => Math.round(Math.min(MAX_PRICE, Math.max(MIN_PRICE, x)) * 1e5) / 1e5;
 
 /**
- * The last finite positive close of a market. Invalid entries are dropped;
- * a market with no usable price at all is an input error, not a guess.
+ * The last finite positive close of a market, or null when the market has
+ * no usable price at all. Invalid entries are dropped, never guessed at.
+ */
+function usableClose(m: CaseMarket): number | null {
+  if (!Array.isArray(m.prices) || m.prices.length === 0) return null;
+  const clean = m.prices.filter((p) => typeof p === 'number' && Number.isFinite(p) && p > 0);
+  return clean.length === 0 ? null : (clean[clean.length - 1] as number);
+}
+
+/**
+ * The last finite positive close of a market. A market with no usable
+ * price at all is an input error, not a guess.
  */
 function lastClose(m: CaseMarket): number {
-  if (!Array.isArray(m.prices) || m.prices.length === 0) throw new Error(`market ${m.id} has no prices`);
-  const clean = m.prices.filter((p) => typeof p === 'number' && Number.isFinite(p) && p > 0);
-  if (clean.length === 0) throw new Error(`market ${m.id} has no finite positive prices`);
-  return clean[clean.length - 1] as number;
+  const c = usableClose(m);
+  if (c === null) throw new Error(`market ${m.id} has no finite positive prices`);
+  return c;
+}
+
+/**
+ * The market to forecast from: the named btc-usdc market when it has a
+ * usable price, otherwise the first market in file order that does. A
+ * named market whose closes are all invalid must not sink the case when
+ * another market in the same file is usable.
+ */
+function pickMarket(c: Case): CaseMarket {
+  const named = c.markets.find((mm) => mm.id === 'btc-usdc');
+  if (named !== undefined && usableClose(named) !== null) return named;
+  for (const mm of c.markets) if (usableClose(mm) !== null) return mm;
+  throw new Error(`no market with a finite positive price`);
 }
 
 /**
@@ -85,9 +107,15 @@ mkdirSync(OUTPUT_DIR, { recursive: true });
 const inputs = readdirSync(INPUT_DIR).filter((f) => f.endsWith('.in')).sort();
 for (const file of inputs) {
   const id = file.slice(0, -'.in'.length);
-  const c = JSON.parse(readFileSync(join(INPUT_DIR, file), 'utf8')) as Case;
-  if (!Array.isArray(c.markets) || c.markets.length < 1) throw new Error(`${file} does not hold a market`);
-  // Prefer the btc-usdc market when named; otherwise take the first market.
-  const market = c.markets.find((mm) => mm.id === 'btc-usdc') ?? (c.markets[0] as CaseMarket);
-  writeFileSync(join(OUTPUT_DIR, `${id}.out`), `${JSON.stringify({ forecasts: [{ case: id, price: forecast(market) }] })}\n`);
+  try {
+    const c = JSON.parse(readFileSync(join(INPUT_DIR, file), 'utf8')) as Case;
+    if (!Array.isArray(c.markets) || c.markets.length < 1) throw new Error(`${file} does not hold a market`);
+    writeFileSync(join(OUTPUT_DIR, `${id}.out`), `${JSON.stringify({ forecasts: [{ case: id, price: forecast(pickMarket(c)) }] })}\n`);
+  } catch (e) {
+    // One unreadable or unusable case must not abort the whole run: the
+    // other cases still score, and a crash here would score zero on all
+    // of them. The failure is reported on stderr; no output is written
+    // for this case.
+    console.error(`skipping ${file}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
